@@ -3,14 +3,16 @@ package main
 /*
 todo:
 1. Понять почему вне case return m, nil ломает навигацию
-2. Реализовать режим edit
-3. Когда будет добавлен lipgloss сделать пометку избранных задач, важных и тд (цветом)
+2. Когда будет добавлен lipgloss сделать пометку избранных задач, важных и тд (цветом)
 
 done:
 1. Понять почему если менять статус у последнего элемента курсор пропадает в никуда:
 индекс курсора после удаление элемента оставался равен индексу удаленного элемента.
 .CursorUp() решил проблему, но необходимо проверять не оказался ли список пустой, иначе
 метод при вызове выйдет за его границы
+
+2. Реализовать режим edit
+
 
 */
 
@@ -26,7 +28,7 @@ import (
 
 type status int
 
-type addMode int
+type mode int
 
 const (
 	todo status = iota
@@ -34,9 +36,11 @@ const (
 )
 
 const (
-	nav addMode = iota
+	nav mode = iota
 	addTitle
 	addDesc
+	editTitle
+	editDesc
 )
 
 type task struct {
@@ -55,7 +59,7 @@ type model struct {
 	inTitle textinput.Model
 	inDesc  textinput.Model
 
-	mode addMode
+	mode mode
 
 	ready bool
 }
@@ -112,6 +116,21 @@ func (m model) switchStatus() model {
 	}
 
 	return m
+}
+
+func (m model) nextMode() mode {
+	switch m.mode {
+	case addTitle:
+		return addDesc
+	case addDesc:
+		return nav
+	case editTitle:
+		return editDesc
+	case editDesc:
+		return nav
+	}
+
+	return nav
 }
 
 func initialModel() model {
@@ -197,11 +216,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "a", "ф":
 				m.mode = addTitle
 				return m, nil
+			case "e", "у":
+				switch m.activeList {
+				case todo:
+					m.inTitle.SetValue(m.todoList.SelectedItem().(task).title)
+					m.inDesc.SetValue(m.todoList.SelectedItem().(task).description)
+				case done:
+					m.inTitle.SetValue(m.doneList.SelectedItem().(task).title)
+					m.inDesc.SetValue(m.doneList.SelectedItem().(task).description)
+				}
+
+				m.mode = editTitle
+				return m, nil
 			}
 
 			// return m, nil - понять почему так не работает
 
-		case addTitle:
+		case addTitle, editTitle:
 			m.inTitle.Focus()
 
 			switch msg.String() {
@@ -218,7 +249,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, cmd
 				}
 				m.inTitle.Blur()
-				m.mode = addDesc
+
+				m.mode = m.nextMode()
 
 				return m, nil
 			}
@@ -226,7 +258,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.inTitle, cmd = m.inTitle.Update(msg)
 			return m, cmd
 
-		case addDesc:
+		case addDesc, editDesc:
 			m.inDesc.Focus()
 
 			switch msg.String() {
@@ -239,8 +271,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			case "enter":
 				m.inDesc.Blur()
-				m = m.saveTask()
-				m.mode = nav
+
+				switch m.mode {
+				case addDesc:
+					m = m.saveTask()
+				case editDesc:
+					title := m.inTitle.Value()
+					desc := m.inDesc.Value()
+
+					switch m.activeList {
+					case todo:
+						t := task{title: title, description: desc}
+
+						m.todoList.SetItem(m.todoList.Cursor(), t)
+
+					case done:
+						t := task{title: title, description: desc}
+
+						m.doneList.SetItem(m.todoList.Cursor(), t)
+					}
+				}
+
+				m.mode = m.nextMode()
 
 				return m, nil
 			}
@@ -289,10 +341,11 @@ func (m model) View() tea.View {
 	}
 
 	switch m.mode {
-	case addTitle:
+	case addTitle, editTitle:
 		footerStr = m.inTitle.View()
-	case addDesc:
+	case addDesc, editDesc:
 		footerStr = m.inDesc.View()
+
 	default:
 		footerStr = "(a) - add (e) - edit (d) - delete (tab) - todo\\done (s) - save (q) - quit"
 

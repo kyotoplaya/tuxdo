@@ -1,4 +1,4 @@
-module todo_v2
+module tuxdo
 
 go 1.27.3
 

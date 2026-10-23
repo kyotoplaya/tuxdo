@@ -32,9 +32,23 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// стиль для названия
+var titleStyle = lipgloss.NewStyle().PaddingLeft(1)
+
+// стиль для important задач
+var importantStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#ff6c6c"))
+
+// стиль для work задач
+var workStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#76fb8c"))
+
+// стиль для home задач
+var homeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#e4ef67"))
+
 type status int
 
 type mode int
+
+type category int
 
 const (
 	todo status = iota
@@ -49,11 +63,19 @@ const (
 	editDesc
 )
 
+const (
+	trivial category = iota
+	important
+	work
+	home
+)
+
 type task struct {
-	Id              int    `json:"id"`
-	TaskTitle       string `json:"title"`
-	Status          status `json:"status"`
-	TaskDescription string `json:"description"`
+	Id              int      `json:"id"`
+	TaskTitle       string   `json:"title"`
+	Status          status   `json:"status"`
+	TaskDescription string   `json:"description"`
+	Category        category `json:"category"`
 }
 
 type model struct {
@@ -100,8 +122,17 @@ func (d listDeligate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		prefix = "> "
 	}
 
-	// стиль для названия
-	titleStyle := lipgloss.NewStyle().PaddingLeft(1)
+	var row string
+	switch t.Category {
+	case trivial:
+		row = t.Title()
+	case important:
+		row = fmt.Sprintf("%s", importantStyle.Render(t.Title()))
+	case work:
+		row = fmt.Sprintf("%s", workStyle.Render(t.Title()))
+	case home:
+		row = fmt.Sprintf("%s", homeStyle.Render(t.Title()))
+	}
 
 	if isSelected {
 		// для выделенного: жирный + акцентный цвет
@@ -121,7 +152,7 @@ func (d listDeligate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		}
 
 	} else {
-		fmt.Fprintf(w, "%s%s", prefix, titleStyle.Render(t.Title()))
+		fmt.Fprintf(w, "%s%s", prefix, row)
 	}
 
 }
@@ -231,6 +262,36 @@ func (m model) switchStatus() model {
 	}
 
 	return m
+}
+
+func nextCategory(c category) category {
+	switch c {
+	case trivial:
+		return important
+	case important:
+		return work
+	case work:
+		return home
+	case home:
+		return trivial
+	}
+
+	return trivial
+}
+
+func strCategory(c category) string {
+	switch c {
+	case trivial:
+		return "trivial"
+	case important:
+		return "important"
+	case work:
+		return "work"
+	case home:
+		return "home"
+	}
+
+	return ""
 }
 
 func (m model) nextMode() mode {
@@ -377,6 +438,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				saveTasksToFile(tasks)
 
 				m.saveFlag = true
+
+			case "c", "с":
+				switch m.activeList {
+				case todo:
+					t := m.todoList.SelectedItem().(task)
+					t.Category = nextCategory(t.Category)
+					m.todoList.SetItem(m.todoList.Cursor(), t)
+				case done:
+					t := m.doneList.SelectedItem().(task)
+					t.Category = nextCategory(t.Category)
+					m.doneList.SetItem(m.doneList.Cursor(), t)
+				}
+
+				m.saveFlag = false
+
+				return m, nil
 			}
 
 			// return m, nil - понять почему так не работает
@@ -489,14 +566,22 @@ func (m model) View() tea.View {
 	var bodyStr, footerStr string
 	var savedStrString string
 	var titleStr string
+	var t task
+	var hasTask bool
 
 	switch m.activeList {
 	case todo:
 		titleStr = fmt.Sprintf("To Do (%d)", len(m.todoList.Items()))
 		bodyStr = lipgloss.NewStyle().Width(m.width).Border(lipgloss.NormalBorder()).Foreground(lipgloss.Color("#FFFFFF")).Render(m.todoList.View())
+		if item := m.todoList.SelectedItem(); item != nil {
+			t, hasTask = item.(task)
+		}
 	case done:
 		titleStr = fmt.Sprintf("Done (%d)", len(m.doneList.Items()))
 		bodyStr = lipgloss.NewStyle().Width(m.width).Border(lipgloss.NormalBorder()).Foreground(lipgloss.Color("#FFFFFF")).Render(m.doneList.View())
+		if item := m.doneList.SelectedItem(); item != nil {
+			t, hasTask = item.(task)
+		}
 	}
 
 	titleStr = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, titleStr)                                                                // размещаем по центру
@@ -510,8 +595,23 @@ func (m model) View() tea.View {
 		footerStr = m.inDesc.View()
 
 	default:
-		footerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#5f5fd7")).Width(m.width)
-		footerStr = footerStyle.Render("(a) - add (e) - edit (d) - delete (tab) - todo\\done (s) - save (q) - quit")
+		footerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Width(m.width)
+
+		catStr := "-"
+		if hasTask {
+			catStr = strCategory(t.Category)
+			switch t.Category {
+			case important:
+				catStr = importantStyle.Render(catStr)
+			case work:
+				catStr = workStyle.Render(catStr)
+			case home:
+				catStr = homeStyle.Render(catStr)
+			}
+		}
+
+		footerStr = fmt.Sprintf("(a) - add (e) - edit (d) - delete (tab) - todo\\done (с) - cat %s (s) - save (q) - quit", catStr)
+		footerStr = footerStyle.Render(footerStr)
 
 		switch m.saveFlag {
 		case true:

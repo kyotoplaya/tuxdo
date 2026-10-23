@@ -13,12 +13,17 @@ done:
 
 2. Реализовать режим edit
 
+3. Сохранение
+
+4. Оформление
+
 
 */
 
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"charm.land/bubbles/v2/list"
@@ -65,6 +70,60 @@ type model struct {
 	ready bool
 
 	saveFlag bool // ture - изменений нет, bool - изменения есть
+
+	width  int
+	height int
+}
+
+type listDeligate struct {
+	// потом тут поля для стилей
+}
+
+func (d listDeligate) Height() int { return 1 }
+
+func (d listDeligate) Spacing() int { return 0 }
+
+func (d listDeligate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
+
+func (d listDeligate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	t, ok := item.(task)
+	if !ok {
+		return
+	}
+
+	// выделен ли этот элемент
+	isSelected := index == m.Index()
+
+	// "> " для выделенного, "  " для остальных
+	prefix := "  "
+	if isSelected {
+		prefix = "> "
+	}
+
+	// стиль для названия
+	titleStyle := lipgloss.NewStyle().PaddingLeft(1)
+
+	if isSelected {
+		// для выделенного: жирный + акцентный цвет
+		titleStyle = titleStyle.Bold(true).Foreground(lipgloss.Color("#ae6fff"))
+
+		descStr := item.(task).Description()
+		if descStr != "" {
+			descStr = lipgloss.NewStyle().Render(descStr)
+
+			if len(descStr) > m.Width()-1 {
+				descStr = descStr[:m.Width()-4] + "..."
+			}
+
+			fmt.Fprintf(w, "%s%s: %s", prefix, titleStyle.Render(t.Title()), descStr)
+		} else {
+			fmt.Fprintf(w, "%s%s", prefix, titleStyle.Render(t.Title()))
+		}
+
+	} else {
+		fmt.Fprintf(w, "%s%s", prefix, titleStyle.Render(t.Title()))
+	}
+
 }
 
 func (t task) FilterValue() string {
@@ -82,7 +141,10 @@ func (t task) Description() string {
 func loadTasks() (todo, done []list.Item) {
 	jsonBytes, err := os.ReadFile("tasks.json")
 	if err != nil {
-		fmt.Println("Error while reading file:", err)
+		if err != os.ErrNotExist { // Если файла просто нет - не считаем это ошибкой, он создаться при сохранении
+			fmt.Println("Error while reading file:", err) // в ином случае выводим ошибку
+		}
+
 		return
 	}
 
@@ -203,22 +265,23 @@ func initialModel() model {
 }
 
 func (m model) initLists(width, height int) model {
+	d := listDeligate{}
 
-	m.todoList = list.New([]list.Item{}, list.NewDefaultDelegate(), width, height)
-	m.doneList = list.New([]list.Item{}, list.NewDefaultDelegate(), width, height)
+	m.todoList = list.New([]list.Item{}, d, width, height)
+	m.doneList = list.New([]list.Item{}, d, width, height)
 
-	m.todoList.Title = "To Do"
-	m.doneList.Title = "Done"
 	// m.todoList.SetItems([]list.Item{
 	// 	task{Status: todo, TaskTitle: "Доделать агента СОМа", TaskDescription: "очередь готова"},
 	// 	task{Status: todo, TaskTitle: "Заказать суши", TaskDescription: "рили хочется"},
 	// 	task{Status: todo, TaskTitle: "Сходить к Гале", TaskDescription: "к 19:00"},
 	// })
 
+	m.todoList.SetShowTitle(false)
 	m.todoList.SetShowHelp(false)
 	m.todoList.SetShowPagination(false)
 	m.todoList.SetShowStatusBar(false)
 
+	m.doneList.SetShowTitle(false)
 	m.doneList.SetShowHelp(false)
 	m.doneList.SetShowPagination(false)
 	m.doneList.SetShowStatusBar(false)
@@ -240,10 +303,6 @@ func (m model) saveTask() model {
 
 	title := m.inTitle.Value()
 	desc := m.inDesc.Value()
-
-	if desc == "" {
-		desc = title
-	}
 
 	t := task{TaskTitle: title, TaskDescription: desc}
 	m.todoList.InsertItem(len(m.todoList.Items()), t)
@@ -274,6 +333,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "tab":
 				m = m.switchList()
 				return m, nil
+
+			case "d", "в":
+				switch m.activeList {
+				case todo:
+					if len(m.todoList.Items()) > 0 {
+						m.todoList.RemoveItem(m.todoList.GlobalIndex())
+					}
+					if len(m.todoList.Items()) > 0 {
+						m.todoList.CursorUp()
+					}
+				case done:
+					if len(m.doneList.Items()) > 0 {
+						m.doneList.RemoveItem(m.todoList.GlobalIndex())
+					}
+					if len(m.doneList.Items()) > 0 {
+						m.doneList.CursorUp()
+					}
+				}
+
+				m.saveFlag = false
 
 			case "a", "ф":
 				m.mode = addTitle
@@ -349,6 +428,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					title := m.inTitle.Value()
 					desc := m.inDesc.Value()
 
+					m.inTitle.Reset()
+					m.inDesc.Reset()
+
 					switch m.activeList {
 					case todo:
 						t := task{TaskTitle: title, TaskDescription: desc}
@@ -373,8 +455,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+
 		colWidth := msg.Width
-		colHeight := msg.Height - 2 // Заголовок - Тело - Футер
+		colHeight := msg.Height - 5 // Заголовок - Тело - Футер - рамка (2)
 
 		if !m.ready {
 			m = m.initLists(colWidth, colHeight)
@@ -402,13 +487,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() tea.View {
 	var bodyStr, footerStr string
+	var savedStrString string
+	var titleStr string
 
 	switch m.activeList {
 	case todo:
-		bodyStr = m.todoList.View()
+		titleStr = fmt.Sprintf("To Do (%d)", len(m.todoList.Items()))
+		bodyStr = lipgloss.NewStyle().Width(m.width).Border(lipgloss.NormalBorder()).Foreground(lipgloss.Color("#FFFFFF")).Render(m.todoList.View())
 	case done:
-		bodyStr = m.doneList.View()
+		titleStr = fmt.Sprintf("Done (%d)", len(m.doneList.Items()))
+		bodyStr = lipgloss.NewStyle().Width(m.width).Border(lipgloss.NormalBorder()).Foreground(lipgloss.Color("#FFFFFF")).Render(m.doneList.View())
 	}
+
+	titleStr = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, titleStr)                                                                // размещаем по центру
+	titleStr = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#5f5fd7")).Render(titleStr) // красим-форматируем текст                                                             // размещаем его по центру
+	titleStr = lipgloss.NewStyle().Width(m.width).Render(titleStr)                                                                         // растягиваем форматирование на всю строку
 
 	switch m.mode {
 	case addTitle, editTitle:
@@ -417,16 +510,20 @@ func (m model) View() tea.View {
 		footerStr = m.inDesc.View()
 
 	default:
+		footerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#5f5fd7")).Width(m.width)
+		footerStr = footerStyle.Render("(a) - add (e) - edit (d) - delete (tab) - todo\\done (s) - save (q) - quit")
+
 		switch m.saveFlag {
 		case true:
-			footerStr = "(a) - add (e) - edit (d) - delete (tab) - todo\\done (s) - save (q) - quit"
+			savedStrString = lipgloss.NewStyle().Foreground(lipgloss.Color("#11ff19")).Bold(true).Render("Saved")
 		case false:
-			footerStr = "changes not saved\n(a) - add (e) - edit (d) - delete (tab) - todo\\done (s) - save (q) - quit"
+			savedStrString = lipgloss.NewStyle().Foreground(lipgloss.Yellow).Bold(true).Render("Unsaved")
+
 		}
 
 	}
 
-	vStr := lipgloss.JoinVertical(lipgloss.Top, bodyStr, footerStr)
+	vStr := lipgloss.JoinVertical(lipgloss.Top, titleStr, bodyStr, footerStr, savedStrString)
 
 	v := tea.NewView(vStr)
 	v.AltScreen = true

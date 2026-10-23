@@ -63,6 +63,8 @@ type model struct {
 	mode mode
 
 	ready bool
+
+	saveFlag bool // ture - изменений нет, bool - изменения есть
 }
 
 func (t task) FilterValue() string {
@@ -194,8 +196,10 @@ func initialModel() model {
 	inDesc.SetWidth(100)
 
 	return model{
-		inTitle: inTitle,
-		inDesc:  inDesc}
+		inTitle:  inTitle,
+		inDesc:   inDesc,
+		saveFlag: true, // при загрузке задач изменений нет
+	}
 }
 
 func (m model) initLists(width, height int) model {
@@ -260,6 +264,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case nav:
 			switch msg.String() {
 			case "q", "й":
+				tasks := splitTaskLists(m.todoList.Items(), m.doneList.Items())
+				saveTasksToFile(tasks)
 				return m, tea.Quit
 			case "enter":
 				m = m.switchStatus()
@@ -271,6 +277,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			case "a", "ф":
 				m.mode = addTitle
+				m.saveFlag = false
 				return m, nil
 			case "e", "у":
 				switch m.activeList {
@@ -283,11 +290,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				m.mode = editTitle
+				m.saveFlag = false
 				return m, nil
 
 			case "s", "ы":
 				tasks := splitTaskLists(m.todoList.Items(), m.doneList.Items())
 				saveTasksToFile(tasks)
+
+				m.saveFlag = true
 			}
 
 			// return m, nil - понять почему так не работает
@@ -407,7 +417,12 @@ func (m model) View() tea.View {
 		footerStr = m.inDesc.View()
 
 	default:
-		footerStr = "(a) - add (e) - edit (d) - delete (tab) - todo\\done (s) - save (q) - quit"
+		switch m.saveFlag {
+		case true:
+			footerStr = "(a) - add (e) - edit (d) - delete (tab) - todo\\done (s) - save (q) - quit"
+		case false:
+			footerStr = "changes not saved\n(a) - add (e) - edit (d) - delete (tab) - todo\\done (s) - save (q) - quit"
+		}
 
 	}
 

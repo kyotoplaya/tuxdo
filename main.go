@@ -17,6 +17,7 @@ done:
 */
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -44,10 +45,10 @@ const (
 )
 
 type task struct {
-	id          int
-	title       string
-	status      status
-	description string
+	Id              int    `json:"id"`
+	TaskTitle       string `json:"title"`
+	Status          status `json:"status"`
+	TaskDescription string `json:"description"`
 }
 
 type model struct {
@@ -65,15 +66,65 @@ type model struct {
 }
 
 func (t task) FilterValue() string {
-	return t.title
+	return t.TaskTitle
 }
 
 func (t task) Title() string {
-	return t.title
+	return t.TaskTitle
 }
 
 func (t task) Description() string {
-	return t.description
+	return t.TaskDescription
+}
+
+func loadTasks() (todo, done []list.Item) {
+	jsonBytes, err := os.ReadFile("tasks.json")
+	if err != nil {
+		fmt.Println("Error while reading file:", err)
+		return
+	}
+
+	rawJson := []task{}
+	err = json.Unmarshal(jsonBytes, &rawJson)
+	if err != nil {
+		fmt.Println("Error while deserialization tasks:", err)
+		return
+	}
+
+	todo = []list.Item{}
+	done = []list.Item{}
+
+	for _, t := range rawJson {
+		if t.Status == 0 {
+			todo = append(todo, t)
+		} else {
+			done = append(done, t)
+		}
+	}
+
+	return todo, done
+
+}
+
+func saveTasksToFile(tasks []list.Item) {
+
+	jsonData, err := json.Marshal(tasks)
+
+	if err != nil {
+		fmt.Println("Serialization error:", err)
+		return
+	}
+
+	err = os.WriteFile("tasks.json", jsonData, 0644)
+	if err != nil {
+		fmt.Println("Error while writing done to file:", err)
+		return
+	}
+}
+
+func splitTaskLists(todoList, doneList []list.Item) []list.Item {
+	tasks := append(todoList, doneList...)
+	return tasks
 }
 
 func (m model) switchList() model {
@@ -95,7 +146,7 @@ func (m model) switchStatus() model {
 		}
 
 		t := m.todoList.SelectedItem().(task)
-		t.status = done
+		t.Status = done
 		m.doneList.InsertItem(len(m.doneList.Items()), t)
 		m.todoList.RemoveItem(m.todoList.GlobalIndex())
 
@@ -107,7 +158,7 @@ func (m model) switchStatus() model {
 		}
 
 		t := m.doneList.SelectedItem().(task)
-		t.status = todo
+		t.Status = todo
 		m.todoList.InsertItem(len(m.todoList.Items()), t)
 		m.doneList.RemoveItem(m.doneList.GlobalIndex())
 
@@ -142,7 +193,9 @@ func initialModel() model {
 	inDesc.Placeholder = "Task description..."
 	inDesc.SetWidth(100)
 
-	return model{inTitle: inTitle, inDesc: inDesc}
+	return model{
+		inTitle: inTitle,
+		inDesc:  inDesc}
 }
 
 func (m model) initLists(width, height int) model {
@@ -151,13 +204,12 @@ func (m model) initLists(width, height int) model {
 	m.doneList = list.New([]list.Item{}, list.NewDefaultDelegate(), width, height)
 
 	m.todoList.Title = "To Do"
-	m.todoList.SetItems([]list.Item{
-		task{status: todo, title: "Доделать агента СОМа", description: "очередь готова"},
-		task{status: todo, title: "Заказать суши", description: "рили хочется"},
-		task{status: todo, title: "Сходить к Гале", description: "к 19:00"},
-	})
-
 	m.doneList.Title = "Done"
+	// m.todoList.SetItems([]list.Item{
+	// 	task{Status: todo, TaskTitle: "Доделать агента СОМа", TaskDescription: "очередь готова"},
+	// 	task{Status: todo, TaskTitle: "Заказать суши", TaskDescription: "рили хочется"},
+	// 	task{Status: todo, TaskTitle: "Сходить к Гале", TaskDescription: "к 19:00"},
+	// })
 
 	m.todoList.SetShowHelp(false)
 	m.todoList.SetShowPagination(false)
@@ -166,6 +218,10 @@ func (m model) initLists(width, height int) model {
 	m.doneList.SetShowHelp(false)
 	m.doneList.SetShowPagination(false)
 	m.doneList.SetShowStatusBar(false)
+
+	todoList, doneList := loadTasks()
+	m.todoList.SetItems(todoList)
+	m.doneList.SetItems(doneList)
 
 	m.ready = true
 
@@ -185,7 +241,7 @@ func (m model) saveTask() model {
 		desc = title
 	}
 
-	t := task{title: title, description: desc}
+	t := task{TaskTitle: title, TaskDescription: desc}
 	m.todoList.InsertItem(len(m.todoList.Items()), t)
 
 	m.inTitle.Reset()
@@ -219,15 +275,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "e", "у":
 				switch m.activeList {
 				case todo:
-					m.inTitle.SetValue(m.todoList.SelectedItem().(task).title)
-					m.inDesc.SetValue(m.todoList.SelectedItem().(task).description)
+					m.inTitle.SetValue(m.todoList.SelectedItem().(task).TaskTitle)
+					m.inDesc.SetValue(m.todoList.SelectedItem().(task).TaskDescription)
 				case done:
-					m.inTitle.SetValue(m.doneList.SelectedItem().(task).title)
-					m.inDesc.SetValue(m.doneList.SelectedItem().(task).description)
+					m.inTitle.SetValue(m.doneList.SelectedItem().(task).TaskTitle)
+					m.inDesc.SetValue(m.doneList.SelectedItem().(task).TaskDescription)
 				}
 
 				m.mode = editTitle
 				return m, nil
+
+			case "s", "ы":
+				tasks := splitTaskLists(m.todoList.Items(), m.doneList.Items())
+				saveTasksToFile(tasks)
 			}
 
 			// return m, nil - понять почему так не работает
@@ -281,12 +341,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					switch m.activeList {
 					case todo:
-						t := task{title: title, description: desc}
+						t := task{TaskTitle: title, TaskDescription: desc}
 
 						m.todoList.SetItem(m.todoList.Cursor(), t)
 
 					case done:
-						t := task{title: title, description: desc}
+						t := task{TaskTitle: title, TaskDescription: desc}
 
 						m.doneList.SetItem(m.todoList.Cursor(), t)
 					}
